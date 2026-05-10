@@ -67,7 +67,8 @@ class CallManager:
         state = self.get_state(chat_id)
         state.playing = False
         state.current = None
-        state.queue.clear()import asyncio
+        state.queue.clear()
+        import asyncio
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
