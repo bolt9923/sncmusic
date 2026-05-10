@@ -1,36 +1,58 @@
 """
-TuneBot — Stable Production Version (Fixed)
+TuneBot / SNCMusic - Production Entry File
+Stable Heroku + Render Compatible Version
 """
 
 import asyncio
 import sys
 
-# FIX: match Heroku Python 3.11
-if sys.version_info < (3, 10):
-    print("❌ Python 3.10+ required")
-    sys.exit(1)
-
 from core.bot import TuneBot
 from config.config import Config
 from helpers.logger import LOGGER
 
+log = LOGGER(__name__)
 
+
+# ─────────────────────────────────────────────
+# PYTHON VERSION CHECK (SAFE)
+# ─────────────────────────────────────────────
+if sys.version_info < (3, 10):
+    print("❌ Python 3.10+ required")
+    sys.exit(1)
+
+
+# ─────────────────────────────────────────────
+# MAIN START FUNCTION
+# ─────────────────────────────────────────────
 async def main():
-    LOGGER(__name__).info("🎵 Starting TuneBot...")
+    try:
+        log.info("🎵 Starting TuneBot...")
 
-    Config.validate()
+        # Validate config (API_ID, BOT_TOKEN, etc.)
+        Config.validate()
 
-    bot = TuneBot()
-    await bot.start()
+        # Start bot
+        bot = TuneBot()
+        await bot.start()
 
-    LOGGER(__name__).info("✅ Bot Running")
+        log.info("✅ TuneBot is ONLINE")
 
-    await asyncio.Event().wait()
+        # Keep alive (VERY IMPORTANT for Heroku worker)
+        await asyncio.Event().wait()
+
+    except Exception as e:
+        log.critical(f"💥 Fatal startup error: {e}", exc_info=True)
+        sys.exit(1)
 
 
+# ─────────────────────────────────────────────
+# ENTRY POINT
+# ─────────────────────────────────────────────
 if __name__ == "__main__":
     try:
         asyncio.run(main())
+    except KeyboardInterrupt:
+        log.info("🛑 Bot stopped manually")
     except Exception as e:
-        LOGGER(__name__).critical(f"Crash: {e}", exc_info=True)
+        log.critical(f"💥 Crash: {e}", exc_info=True)
         sys.exit(1)
