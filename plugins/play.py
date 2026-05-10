@@ -108,8 +108,6 @@ async def _queue_and_play(
 
         # ── Queue management ───────────────────────────────────────────────
         state = call_manager.get_state(chat_id)
-        assistant = tunebot.get_assistant(chat_id)
-        assistant_id = (await assistant.get_me()).id
 
         if state.is_playing or state.is_paused:
             # Add to queue
@@ -128,7 +126,7 @@ async def _queue_and_play(
         else:
             # Play immediately
             await status_msg.edit("🎵 **Joining voice chat…**")
-            await call_manager.play(chat_id, track, assistant_id)
+            await call_manager.play(chat_id, track)
 
             np_text = now_playing_text(track, state)
             np_kbd = now_playing_keyboard(chat_id, state)
@@ -201,13 +199,11 @@ async def play_command(client: Client, message: Message):
                     source="file",
                 )
                 state = call_manager.get_state(message.chat.id)
-                assistant = tunebot.get_assistant(message.chat.id)
-                assistant_id = (await assistant.get_me()).id
                 if state.is_playing or state.is_paused:
                     call_manager.add_to_queue(message.chat.id, track)
                     await message.reply(f"✅ **Added to queue:** {title}", quote=True)
                 else:
-                    await call_manager.play(message.chat.id, track, assistant_id)
+                    await call_manager.play(message.chat.id, track)
                     await message.reply(
                         now_playing_text(track, state),
                         reply_markup=now_playing_keyboard(message.chat.id, state),
@@ -274,12 +270,10 @@ async def play_command(client: Client, message: Message):
                     source="spotify",
                 )
                 state = call_manager.get_state(message.chat.id)
-                assistant = tunebot.get_assistant(message.chat.id)
-                assistant_id = (await assistant.get_me()).id
                 if state.is_playing or state.is_paused or added > 0:
                     call_manager.add_to_queue(message.chat.id, track)
                 else:
-                    await call_manager.play(message.chat.id, track, assistant_id)
+                    await call_manager.play(message.chat.id, track)
                 added += 1
             await status.edit(f"✅ **Added {added} tracks to queue from Spotify {url_type}.**")
         return
@@ -311,12 +305,10 @@ async def play_command(client: Client, message: Message):
                 file_path=file_path,
             )
             state = call_manager.get_state(message.chat.id)
-            assistant = tunebot.get_assistant(message.chat.id)
-            assistant_id = (await assistant.get_me()).id
             if state.is_playing or state.is_paused or added > 0:
                 call_manager.add_to_queue(message.chat.id, track)
             else:
-                await call_manager.play(message.chat.id, track, assistant_id)
+                await call_manager.play(message.chat.id, track)
             added += 1
         await status.edit(f"✅ **Queued {added} tracks from playlist.**")
         return
