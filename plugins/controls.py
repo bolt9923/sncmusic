@@ -26,11 +26,6 @@ from helpers.ui import (
 log = LOGGER(__name__)
 
 
-# ── Helper: get assistant_id for chat ─────────────────────────────────────────
-
-async def _aid(chat_id: int) -> int:
-    assistant = tunebot.get_assistant(chat_id)
-    return (await assistant.get_me()).id
 
 
 # ── /skip ─────────────────────────────────────────────────────────────────────
@@ -47,11 +42,10 @@ async def skip_command(client: Client, message: Message):
 
     args = message.text.split()
     count = int(args[1]) if len(args) > 1 and args[1].isdigit() else 1
-    aid = await _aid(chat_id)
 
     skipped = 0
     for _ in range(max(1, count)):
-        next_track = await call_manager.skip(chat_id, aid)
+        next_track = await call_manager.skip(chat_id)
         skipped += 1
         if not next_track:
             break
@@ -75,8 +69,7 @@ async def pause_command(client: Client, message: Message):
     if not state.is_playing:
         await message.reply("❌ Nothing is playing or already paused.", quote=True)
         return
-    aid = await _aid(chat_id)
-    await call_manager.pause(chat_id, aid)
+    await call_manager.pause(chat_id)
     await message.reply("⏸ **Paused.** Use /resume to continue.", quote=True)
 
 
@@ -91,8 +84,7 @@ async def resume_command(client: Client, message: Message):
     if not state.is_paused:
         await message.reply("❌ Playback is not paused.", quote=True)
         return
-    aid = await _aid(chat_id)
-    await call_manager.resume(chat_id, aid)
+    await call_manager.resume(chat_id)
     await message.reply("▶️ **Resumed.**", quote=True)
 
 
@@ -107,8 +99,7 @@ async def stop_command(client: Client, message: Message):
     if not state.is_playing and not state.is_paused and not state.queue:
         await message.reply("❌ Nothing to stop.", quote=True)
         return
-    aid = await _aid(chat_id)
-    await call_manager.stop(chat_id, aid)
+    await call_manager.stop(chat_id)
     call_manager.cleanup_state(chat_id)
     await message.reply("⏹ **Stopped playback and cleared queue.**", quote=True)
 
@@ -144,9 +135,8 @@ async def seek_command(client: Client, message: Message):
         )
         return
 
-    aid = await _aid(chat_id)
     try:
-        await call_manager.seek(chat_id, seconds, aid)
+        await call_manager.seek(chat_id, seconds)
         await message.reply(
             f"⏩ **Seeked to** `{seconds_to_time(seconds)}`", quote=True
         )
@@ -177,9 +167,8 @@ async def volume_command(client: Client, message: Message):
         await message.reply("❌ Please provide a valid volume (1–200).", quote=True)
         return
 
-    aid = await _aid(chat_id)
     try:
-        await call_manager.set_volume(chat_id, vol, aid)
+        await call_manager.set_volume(chat_id, vol)
         state = call_manager.get_state(chat_id)
         emoji = "🔊" if state.volume > 50 else "🔉" if state.volume > 0 else "🔇"
         await message.reply(f"{emoji} **Volume set to** `{state.volume}%`", quote=True)
@@ -282,7 +271,6 @@ async def control_callback(client: Client, callback: CallbackQuery):
             await callback.answer("🚫 Could not verify permissions.", show_alert=True)
             return
 
-    aid = await _aid(chat_id)
     state = call_manager.get_state(chat_id)
 
     try:
@@ -290,22 +278,22 @@ async def control_callback(client: Client, callback: CallbackQuery):
             if not state.is_playing:
                 await callback.answer("Nothing is playing.", show_alert=True)
                 return
-            await call_manager.pause(chat_id, aid)
+            await call_manager.pause(chat_id)
             await callback.answer("⏸ Paused.")
 
         elif action == "resume":
             if not state.is_paused:
                 await callback.answer("Not paused.", show_alert=True)
                 return
-            await call_manager.resume(chat_id, aid)
+            await call_manager.resume(chat_id)
             await callback.answer("▶️ Resumed.")
 
         elif action == "skip":
-            await call_manager.skip(chat_id, aid)
+            await call_manager.skip(chat_id)
             await callback.answer("⏭ Skipped.")
 
         elif action == "stop":
-            await call_manager.stop(chat_id, aid)
+            await call_manager.stop(chat_id)
             call_manager.cleanup_state(chat_id)
             await callback.message.edit("⏹ **Playback stopped and queue cleared.**")
             return
@@ -325,12 +313,12 @@ async def control_callback(client: Client, callback: CallbackQuery):
 
         elif action == "volup":
             new_vol = min(200, state.volume + 10)
-            await call_manager.set_volume(chat_id, new_vol, aid)
+            await call_manager.set_volume(chat_id, new_vol)
             await callback.answer(f"🔊 Volume: {new_vol}%")
 
         elif action == "voldn":
             new_vol = max(1, state.volume - 10)
-            await call_manager.set_volume(chat_id, new_vol, aid)
+            await call_manager.set_volume(chat_id, new_vol)
             await callback.answer(f"🔉 Volume: {new_vol}%")
 
         elif action == "queue":
