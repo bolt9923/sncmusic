@@ -1,0 +1,41 @@
+# Environment
+.env
+*.session
+*.session-journal
+
+# Downloads & cache
+downloads/
+cache/
+logs/
+*.mp3
+*.mp4
+*.m4a
+*.webm
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Docker
+.dockerignore
+
+# Node (if any tooling)
+node_modules/

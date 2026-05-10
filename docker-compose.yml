@@ -1,0 +1,35 @@
+version: "3.9"
+
+services:
+  tunebot:
+    build: .
+    container_name: tunebot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./downloads:/app/downloads
+      - ./logs:/app/logs
+      - ./cache:/app/cache
+    depends_on:
+      - mongodb
+    networks:
+      - tunebot_net
+
+  mongodb:
+    image: mongo:7-jammy
+    container_name: tunebot_mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_DATABASE: TuneBot
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - tunebot_net
+
+volumes:
+  mongo_data:
+
+networks:
+  tunebot_net:
+    driver: bridge

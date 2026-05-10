@@ -1,0 +1,66 @@
+{
+  "name": "TuneBot",
+  "description": "A production-grade Telegram Music Bot built with Pyrogram + PyTgCalls",
+  "keywords": ["telegram", "music", "bot", "python"],
+  "repository": "https://github.com/yourname/TuneBot",
+  "logo": "https://i.imgur.com/placeholder.png",
+  "success_url": "/",
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    },
+    {
+      "url": "https://github.com/jonathanong/heroku-buildpack-ffmpeg-latest.git"
+    }
+  ],
+  "env": {
+    "API_ID": {
+      "description": "Telegram API ID from https://my.telegram.org/apps",
+      "required": true
+    },
+    "API_HASH": {
+      "description": "Telegram API Hash from https://my.telegram.org/apps",
+      "required": true
+    },
+    "BOT_TOKEN": {
+      "description": "Bot token from @BotFather",
+      "required": true
+    },
+    "STRING_SESSIONS": {
+      "description": "Pyrogram string session(s) for assistant accounts (comma-separated)",
+      "required": true
+    },
+    "MONGO_DB_URI": {
+      "description": "MongoDB Atlas connection URI",
+      "required": true
+    },
+    "OWNER_ID": {
+      "description": "Your Telegram user ID",
+      "required": true
+    },
+    "LOGGER_ID": {
+      "description": "Logger group chat ID (optional)",
+      "required": false
+    },
+    "SPOTIFY_CLIENT_ID": {
+      "description": "Spotify Client ID (optional)",
+      "required": false
+    },
+    "SPOTIFY_CLIENT_SECRET": {
+      "description": "Spotify Client Secret (optional)",
+      "required": false
+    },
+    "GENIUS_API_TOKEN": {
+      "description": "Genius API token for lyrics (optional)",
+      "required": false
+    }
+  },
+  "formation": {
+    "worker": {
+      "quantity": 1,
+      "size": "standard-2x"
+    }
+  },
+  "addons": [],
+  "stack": "heroku-24"
+}

@@ -1,0 +1,31 @@
+services:
+  - type: worker
+    name: tunebot
+    runtime: python
+    buildCommand: |
+      apt-get update -y && apt-get install -y ffmpeg
+      pip install -r requirements.txt
+    startCommand: python3 -m __main__
+    envVars:
+      - key: API_ID
+        sync: false
+      - key: API_HASH
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: STRING_SESSIONS
+        sync: false
+      - key: MONGO_DB_URI
+        sync: false
+      - key: OWNER_ID
+        sync: false
+      - key: LOGGER_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
+      - key: GENIUS_API_TOKEN
+        sync: false
+    autoDeploy: true
+    plan: standard
