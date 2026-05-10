@@ -51,7 +51,11 @@ class TuneBot:
         # 3. Assistant clients
         await self._start_assistants()
 
-        # 4. Load plugins
+        # 4. Init PyTgCalls (must happen before plugins so stream_events can register)
+        from core.call_manager import call_manager
+        await call_manager.init_assistants(self.assistants)
+
+        # 5. Load plugins (stream_events.py registers stream-end callbacks here)
         self._load_plugins()
 
         self._started = True
