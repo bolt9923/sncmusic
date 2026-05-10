@@ -1,140 +1,111 @@
 import asyncio
 from dataclasses import dataclass, field
+from enum import Enum, auto
 from typing import Dict, List, Optional
 
-from pyrogram import Client
+from pytgcalls import PyTgCalls
+from pytgcalls.types.input_stream import AudioPiped
 
 from helpers.logger import LOGGER
 
 log = LOGGER(__name__)
 
 
-@dataclass
-class Track:
-    title: str
-    file_path: str
-    requester_id: int
+# ─────────────────────────────
+# MODELS (RESTORED FOR UI)
+# ─────────────────────────────
 
-
-@dataclass
-class State:
-    queue: List[Track] = field(default_factory=list)
-    current: Optional[Track] = None
-    playing: bool = False
-
-
-class CallManager:
-    def __init__(self):
-        self.clients: Dict[int, Client] = {}
-        self.state: Dict[int, State] = {}
-
-    def get_state(self, chat_id):
-        if chat_id not in self.state:
-            self.state[chat_id] = State()
-        return self.state[chat_id]
-
-    def register_client(self, chat_id: int, client: Client):
-        self.clients[chat_id] = client
-
-    async def play(self, chat_id: int, file_path: str):
-        """
-        STABLE METHOD:
-        Uses Pyrogram Voice Chat streaming via FFmpeg process
-        (no PyTgCalls dependency = no crashes)
-        """
-        state = self.get_state(chat_id)
-
-        process = await asyncio.create_subprocess_exec(
-            "ffmpeg",
-            "-re",
-            "-i",
-            file_path,
-            "-f",
-            "s16le",
-            "-ac",
-            "2",
-            "-ar",
-            "48000",
-            "pipe:1"
-        )
-
-        state.current = Track("song", file_path, 0)
-        state.playing = True
-
-        log.info(f"▶ Playing in VC: {chat_id}")
-
-    async def stop(self, chat_id: int):
-        state = self.get_state(chat_id)
-        state.playing = False
-        state.current = None
-        state.queue.clear()
-        import asyncio
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional
-
-from pyrogram import Client
-
-from helpers.logger import LOGGER
-
-log = LOGGER(__name__)
+class LoopMode(Enum):
+    NONE = auto()
+    TRACK = auto()
+    QUEUE = auto()
 
 
 @dataclass
 class Track:
     title: str
-    file_path: str
-    requester_id: int
+    url: str
+    duration: int = 0
+    thumbnail: str = ""
+    requester_id: int = 0
+    requester_name: str = ""
+    file_path: Optional[str] = None
 
 
 @dataclass
-class State:
+class GroupCallState:
     queue: List[Track] = field(default_factory=list)
     current: Optional[Track] = None
-    playing: bool = False
+    is_playing: bool = False
+    is_paused: bool = False
+    loop_mode: LoopMode = LoopMode.NONE
 
+
+# ─────────────────────────────
+# CALL MANAGER
+# ─────────────────────────────
 
 class CallManager:
     def __init__(self):
-        self.clients: Dict[int, Client] = {}
-        self.state: Dict[int, State] = {}
+        self.calls: Dict[int, PyTgCalls] = {}
+        self.states: Dict[int, GroupCallState] = {}
+        self.assistants = []
 
-    def get_state(self, chat_id):
-        if chat_id not in self.state:
-            self.state[chat_id] = State()
-        return self.state[chat_id]
+    def get_state(self, chat_id: int) -> GroupCallState:
+        if chat_id not in self.states:
+            self.states[chat_id] = GroupCallState()
+        return self.states[chat_id]
 
-    def register_client(self, chat_id: int, client: Client):
-        self.clients[chat_id] = client
+    async def init_assistants(self, assistants):
+        self.assistants = assistants
+        log.info("VC Manager initialized")
 
-    async def play(self, chat_id: int, file_path: str):
-        """
-        STABLE METHOD:
-        Uses Pyrogram Voice Chat streaming via FFmpeg process
-        (no PyTgCalls dependency = no crashes)
-        """
+    def get_call(self, chat_id: int):
+        if chat_id not in self.calls:
+            assistant = self.assistants[abs(chat_id) % len(self.assistants)]
+            self.calls[chat_id] = PyTgCalls(assistant)
+        return self.calls[chat_id]
+
+    async def start(self, chat_id: int):
+        call = self.get_call(chat_id)
+        await call.start()
+
+    async def play(self, chat_id: int, track: Track):
+        if not track.file_path:
+            return
+
+        call = self.get_call(chat_id)
         state = self.get_state(chat_id)
 
-        process = await asyncio.create_subprocess_exec(
-            "ffmpeg",
-            "-re",
-            "-i",
-            file_path,
-            "-f",
-            "s16le",
-            "-ac",
-            "2",
-            "-ar",
-            "48000",
-            "pipe:1"
-        )
+        if state.is_playing:
+            await call.change_stream(chat_id, AudioPiped(track.file_path))
+        else:
+            await call.join_group_call(chat_id, AudioPiped(track.file_path))
 
-        state.current = Track("song", file_path, 0)
-        state.playing = True
+        state.current = track
+        state.is_playing = True
+        state.is_paused = False
 
-        log.info(f"▶ Playing in VC: {chat_id}")
+    async def pause(self, chat_id: int):
+        call = self.get_call(chat_id)
+        await call.pause_stream(chat_id)
+
+        state = self.get_state(chat_id)
+        state.is_paused = True
+        state.is_playing = False
+
+    async def resume(self, chat_id: int):
+        call = self.get_call(chat_id)
+        await call.resume_stream(chat_id)
+
+        state = self.get_state(chat_id)
+        state.is_paused = False
+        state.is_playing = True
 
     async def stop(self, chat_id: int):
-        state = self.get_state(chat_id)
-        state.playing = False
-        state.current = None
-        state.queue.clear()
+        call = self.calls.get(chat_id)
+        if call:
+            await call.leave_group_call(chat_id)
+            self.calls.pop(chat_id, None)
+
+        self.states.pop(chat_id, None)
