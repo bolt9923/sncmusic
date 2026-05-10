@@ -1,36 +1,14 @@
-# ── Core Telegram Framework ───────────────────────────────────────────────────
-Pyrogram==2.0.106
-TgCrypto==1.2.5
-# PyTgCalls 0.0.24 = ONLY series with zero compiled dependencies.
-# Versions 1.x / 2.x / 3.x ALL require tgcalls (C++ wheel) absent from PyPI.
-PyTgCalls==0.0.24
-
-# ── Database ──────────────────────────────────────────────────────────────────
-motor==3.4.0
-pymongo==4.7.3
-
-# ── Audio Download & Processing ───────────────────────────────────────────────
-yt-dlp>=2024.11.18
-
-# ── Spotify ───────────────────────────────────────────────────────────────────
-spotipy==2.24.0
-
-# ── Lyrics ────────────────────────────────────────────────────────────────────
-lyricsgenius==3.0.1
-
-# ── System / Utility ─────────────────────────────────────────────────────────
-psutil==6.1.0
-speedtest-cli==2.1.3
-
-# ── Async Utilities ───────────────────────────────────────────────────────────
-aiohttp==3.10.10
-aiofiles==24.1.0
-
-# ── Image / Thumbnail ─────────────────────────────────────────────────────────
-Pillow==11.0.0
-
-# ── Environment ───────────────────────────────────────────────────────────────
-python-dotenv==1.0.1
-
-# ── Optional: HTTP Proxy support ──────────────────────────────────────────────
-aiohttp-socks==0.10.0
+pyrogram==2.0.106
+py-tgcalls==2.1.0
+tgcrypto
+yt-dlp
+youtube-search-python
+spotipy
+motor
+dnspython
+ffmpeg-python
+python-dotenv
+aiohttp
+requests
+pillow
+numpy
