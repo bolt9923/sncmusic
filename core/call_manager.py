@@ -10,7 +10,8 @@ PyTgCalls 0.0.x is pure Python and installs cleanly everywhere.
 
 PyTgCalls 0.0.24 API:
 ──────────────────────
-  from pytgcalls import GroupCallFile, GroupCallFileAction
+  from pytgcalls import PyTgCalls
+  from pytgcalls.types.input_stream import AudioPiped
   call = GroupCallFile(client)
   await call.start(chat_id, file_path)   # joins VC and starts stream
   await call.stop()                       # leaves VC
