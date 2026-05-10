@@ -1,9 +1,9 @@
 # ── Core Telegram Framework ───────────────────────────────────────────────────
 Pyrogram==2.0.106
 TgCrypto==1.2.5
-# PyTgCalls 2.1.0 = latest STABLE release; no broken tgcalls transitive dep.
-# All 3.x dev builds require tgcalls (C++ wheel) which is NOT published on PyPI.
-PyTgCalls==2.1.0
+# PyTgCalls 0.0.24 = ONLY series with zero compiled dependencies.
+# Versions 1.x / 2.x / 3.x ALL require tgcalls (C++ wheel) absent from PyPI.
+PyTgCalls==0.0.24
 
 # ── Database ──────────────────────────────────────────────────────────────────
 motor==3.4.0
