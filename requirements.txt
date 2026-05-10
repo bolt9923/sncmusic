@@ -3,12 +3,11 @@ py-tgcalls==2.1.0
 tgcrypto
 yt-dlp
 youtube-search-python
-spotipy
 motor
 dnspython
 ffmpeg-python
-python-dotenv
 aiohttp
 requests
 pillow
 numpy
+python-dotenv
