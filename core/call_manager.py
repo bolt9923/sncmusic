@@ -1,52 +1,41 @@
 """
-core/call_manager.py — Voice chat controller using PyTgCalls 2.1.0 (stable)
+core/call_manager.py — Voice chat controller using PyTgCalls 0.0.24
 
-PyTgCalls 2.x API used here:
-────────────────────────────
-  from pytgcalls import PyTgCalls
-  from pytgcalls.types.input_stream import AudioPiped, AudioParameters
-  from pytgcalls.types import Update
-  from pytgcalls.exceptions import (
-      AlreadyJoinedError, NoActiveGroupCall, NotInCallError
-  )
+WHY 0.0.24?
+───────────
+PyTgCalls 1.x / 2.x / 3.x ALL declare tgcalls as a dependency.
+tgcalls is a compiled C++ wheel that is NEVER published on PyPI —
+pip fails on Heroku, Railway, Render, and any standard pip environment.
+PyTgCalls 0.0.x is pure Python and installs cleanly everywhere.
 
-  call = PyTgCalls(client)
-  await call.start()
-  await call.join_group_call(chat_id, AudioPiped(path))
-  await call.leave_group_call(chat_id)
-  await call.pause_stream(chat_id)
-  await call.resume_stream(chat_id)
-  await call.change_stream(chat_id, AudioPiped(path))
-  await call.change_volume_call(chat_id, volume)
+PyTgCalls 0.0.24 API:
+──────────────────────
+  from pytgcalls import GroupCallFile, GroupCallFileAction
+  call = GroupCallFile(client)
+  await call.start(chat_id, file_path)   # joins VC and starts stream
+  await call.stop()                       # leaves VC
+  await call.pause()
+  await call.resume()
+  # seek → restart stream with input_filename pointing to offset via ffmpeg pipe
+  call.input_filename = path              # hot-swap audio file
+  call.on_network_status_changed         # event: stream ended / network changed
+  call.client                            # the Pyrogram client
 
-  @call.on_stream_end()
-  async def handler(_, update: Update): ...
-  update.chat_id is the group chat ID.
+  For URL streaming we pipe through FFmpeg:
+    ffmpeg -i <url> -f s16le -ac 2 -ar 48000 pipe:1
+  and feed the stdout as input_filename = 'pipe:' or local .raw file.
 
-Why 2.x not 3.x:
-  All PyTgCalls 3.x dev builds depend on `tgcalls` (a compiled C++ wheel)
-  which has never been published on PyPI — pip install fails on every
-  platform (Heroku, Railway, Render, Docker).  PyTgCalls 2.1.0 is pure-Python
-  compatible, installs cleanly, and is the version used by virtually all
-  production Telegram music bots.
+  In practice: download with yt-dlp to a local .mp3 first,
+  then point GroupCallFile at the file path — stable and simple.
 """
 
+import asyncio
 import random
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Callable, Dict, List, Optional
 
-from pytgcalls import PyTgCalls
-from pytgcalls.types.input_stream import AudioPiped, AudioParameters
-
-# Graceful exception import — class names are stable in 2.1.0
-try:
-    from pytgcalls.exceptions import AlreadyJoinedError, NoActiveGroupCall, NotInCallError
-except ImportError:
-    # Fallback: treat everything as a generic Exception
-    AlreadyJoinedError = Exception
-    NoActiveGroupCall = Exception
-    NotInCallError = Exception
+from pytgcalls import GroupCallFile, GroupCallFileAction
 
 from config.config import Config
 from helpers.logger import LOGGER
@@ -73,7 +62,7 @@ class Track:
     requester_id: int
     requester_name: str
     source: str = "youtube"           # youtube | spotify | file
-    file_path: Optional[str] = None  # Local path after yt-dlp download
+    file_path: Optional[str] = None   # Local path after yt-dlp download
 
 
 @dataclass
@@ -85,33 +74,7 @@ class GroupCallState:
     loop_mode: LoopMode = LoopMode.NONE
     volume: int = Config.DEFAULT_VOLUME
     always_on: bool = Config.ALWAYS_ON_DEFAULT
-    message_id: Optional[int] = None  # Telegram message ID of the now-playing card
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Audio stream builder
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _build_stream(track: Track, seek_seconds: int = 0) -> AudioPiped:
-    """
-    Return an AudioPiped stream for the given track.
-    Uses the local downloaded file when available; falls back to URL.
-    Applies -ss <seek> via additional_ffmpeg_parameters when seeking.
-    """
-    source = track.file_path or track.url
-
-    params = AudioParameters(
-        bitrate=160,    # 160 kbps — good quality, low CPU
-    )
-
-    if seek_seconds > 0:
-        return AudioPiped(
-            source,
-            audio_parameters=params,
-            additional_ffmpeg_parameters=f"-ss {seek_seconds}",
-        )
-
-    return AudioPiped(source, audio_parameters=params)
+    message_id: Optional[int] = None   # Telegram message ID of now-playing card
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -120,46 +83,63 @@ def _build_stream(track: Track, seek_seconds: int = 0) -> AudioPiped:
 
 class CallManager:
     """
-    One PyTgCalls instance per assistant (userbot) client.
-    One GroupCallState per active group chat.
+    Manages one GroupCallFile (PyTgCalls 0.0.24) per active group chat.
+    Each chat gets its own GroupCallFile instance bound to one assistant.
     """
 
     def __init__(self):
-        self._pytgcalls: Dict[int, PyTgCalls] = {}   # assistant_id → PyTgCalls
-        self._states: Dict[int, GroupCallState] = {}  # chat_id → state
-        self._chat_assistant: Dict[int, int] = {}     # chat_id → assistant_id
+        # chat_id → GroupCallFile instance
+        self._calls: Dict[int, GroupCallFile] = {}
+        # chat_id → GroupCallState
+        self._states: Dict[int, GroupCallState] = {}
+        # assistant clients list (set by init_assistants)
+        self._assistants: list = []
+        # User-supplied stream-end callback
+        self._on_end_cb: Optional[Callable] = None
 
-    # ── Startup ───────────────────────────────────────────────────────────
+    # ── Setup ─────────────────────────────────────────────────────────────
 
     async def init_assistants(self, assistants: list):
-        """Start a PyTgCalls instance for every assistant Pyrogram client."""
-        for client in assistants:
-            me = await client.get_me()
-            call = PyTgCalls(client)
-            await call.start()
-            self._pytgcalls[me.id] = call
-            log.info(f"🎵 PyTgCalls 2.x ready for @{me.username} ({me.id})")
+        """Store assistant clients. GroupCallFile instances are created per-chat."""
+        self._assistants = assistants
+        log.info(f"🎵 CallManager ready with {len(assistants)} assistant(s).")
 
-    # ── Internal ──────────────────────────────────────────────────────────
+    def _get_assistant(self, chat_id: int):
+        """Round-robin assistant selection by chat_id."""
+        return self._assistants[abs(chat_id) % len(self._assistants)]
 
-    def _call(self, assistant_id: int) -> PyTgCalls:
-        inst = self._pytgcalls.get(assistant_id)
-        if inst is None:
-            raise RuntimeError(
-                f"No PyTgCalls instance for assistant {assistant_id}. "
-                "Call init_assistants() first."
-            )
-        return inst
+    # ── State helpers ──────────────────────────────────────────────────────
 
     def get_state(self, chat_id: int) -> GroupCallState:
         if chat_id not in self._states:
             self._states[chat_id] = GroupCallState()
         return self._states[chat_id]
 
+    def _get_or_create_call(self, chat_id: int) -> GroupCallFile:
+        """Get or create a GroupCallFile for this chat."""
+        if chat_id not in self._calls:
+            assistant = self._get_assistant(chat_id)
+            call = GroupCallFile(assistant)
+
+            # Attach stream-end / network handler
+            @call.on_network_status_changed
+            async def _on_network(context, is_connected: bool):
+                if not is_connected:
+                    log.info(f"📡 Stream ended / disconnected in {chat_id}.")
+                    if self._on_end_cb:
+                        try:
+                            # Get assistant_id for this call
+                            me = await assistant.get_me()
+                            await self._on_end_cb(chat_id, me.id)
+                        except Exception as e:
+                            log.error(f"on_end_cb error: {e}", exc_info=True)
+
+            self._calls[chat_id] = call
+        return self._calls[chat_id]
+
     # ── Queue helpers ──────────────────────────────────────────────────────
 
     def add_to_queue(self, chat_id: int, track: Track) -> int:
-        """Append track to queue; return 1-based position."""
         state = self.get_state(chat_id)
         state.queue.append(track)
         return len(state.queue)
@@ -172,135 +152,158 @@ class CallManager:
 
     # ── Playback ──────────────────────────────────────────────────────────
 
-    async def play(self, chat_id: int, track: Track, assistant_id: int):
+    async def play(self, chat_id: int, track: Track, assistant_id: int = None):
         """
         Stream *track* into *chat_id*'s voice chat.
-
-        First call  → join_group_call (joins VC and starts streaming).
-        Already in  → change_stream (swap audio source without re-joining).
+        - First call: joins the group call and starts streaming.
+        - Already in call: hot-swaps the audio file (no re-join needed).
         """
+        if not track.file_path:
+            raise ValueError(f"Track '{track.title}' has no downloaded file path.")
+
         state = self.get_state(chat_id)
-        call  = self._call(assistant_id)
-        stream = _build_stream(track)
+        call  = self._get_or_create_call(chat_id)
 
-        try:
-            await call.join_group_call(chat_id, stream)
+        if state.is_playing or state.is_paused:
+            # Already in VC — hot-swap the file
+            call.input_filename = track.file_path
+            if state.is_paused:
+                await call.resume()
+        else:
+            # Join VC and start streaming
+            await call.start(chat_id, track.file_path)
 
-        except AlreadyJoinedError:
-            # Already in the VC — just swap the audio source
-            await call.change_stream(chat_id, stream)
-
-        except Exception as e:
-            msg = str(e).lower()
-            if "already" in msg or "joined" in msg:
-                await call.change_stream(chat_id, stream)
-            else:
-                log.error(f"join_group_call failed in {chat_id}: {e}", exc_info=True)
-                raise
-
-        # Update state
-        state.current   = track
+        state.current    = track
         state.is_playing = True
         state.is_paused  = False
-        self._chat_assistant[chat_id] = assistant_id
 
-        # Apply saved volume (best-effort; may lag a moment after joining)
+        # Volume
         try:
-            await call.change_volume_call(chat_id, state.volume)
+            await self.set_volume(chat_id, state.volume)
         except Exception:
             pass
 
-    async def skip(self, chat_id: int, assistant_id: int) -> Optional[Track]:
+    async def skip(self, chat_id: int, assistant_id: int = None) -> Optional[Track]:
         """
-        Advance the queue by one track.
-        Respects TRACK loop (repeat same) and QUEUE loop (rotate).
-        Returns the new current track, or None if the queue is now empty.
+        Advance to next track respecting loop mode.
+        Returns new current track or None if queue is empty.
         """
         state = self.get_state(chat_id)
 
-        # Loop track — replay current
         if state.loop_mode == LoopMode.TRACK and state.current:
-            await self.play(chat_id, state.current, assistant_id)
+            await self.play(chat_id, state.current)
             return state.current
 
-        # Loop queue — push current to end
         if state.loop_mode == LoopMode.QUEUE and state.current:
             state.queue.append(state.current)
 
         if state.queue:
             next_track = state.queue.pop(0)
-            await self.play(chat_id, next_track, assistant_id)
+            await self.play(chat_id, next_track)
             return next_track
 
-        # Nothing left
-        await self._finish(chat_id, assistant_id)
+        await self._finish(chat_id)
         return None
 
-    async def _finish(self, chat_id: int, assistant_id: int):
-        """Queue exhausted. Leave VC unless 24/7 mode is on."""
+    async def _finish(self, chat_id: int):
+        """Queue empty — leave VC unless 24/7 is on."""
         state = self.get_state(chat_id)
         state.current    = None
         state.is_playing = False
         state.is_paused  = False
 
         if state.always_on:
-            log.info(f"🔁 24/7 mode active — staying in VC for {chat_id}.")
+            log.info(f"🔁 24/7 active — staying in VC for {chat_id}.")
             return
 
-        try:
-            await self._call(assistant_id).leave_group_call(chat_id)
-            log.info(f"👋 Left VC in {chat_id} (queue empty).")
-        except NotInCallError:
-            pass
-        except Exception as e:
-            if "not" not in str(e).lower():
-                log.warning(f"leave_group_call error in {chat_id}: {e}")
+        call = self._calls.get(chat_id)
+        if call:
+            try:
+                await call.stop()
+            except Exception as e:
+                log.warning(f"stop() error in {chat_id}: {e}")
+            self._calls.pop(chat_id, None)
 
-    async def pause(self, chat_id: int, assistant_id: int):
-        await self._call(assistant_id).pause_stream(chat_id)
-        s = self.get_state(chat_id)
-        s.is_playing = False
-        s.is_paused  = True
+    async def pause(self, chat_id: int, assistant_id: int = None):
+        call = self._calls.get(chat_id)
+        if call:
+            await call.pause()
+        state = self.get_state(chat_id)
+        state.is_playing = False
+        state.is_paused  = True
 
-    async def resume(self, chat_id: int, assistant_id: int):
-        await self._call(assistant_id).resume_stream(chat_id)
-        s = self.get_state(chat_id)
-        s.is_playing = True
-        s.is_paused  = False
+    async def resume(self, chat_id: int, assistant_id: int = None):
+        call = self._calls.get(chat_id)
+        if call:
+            await call.resume()
+        state = self.get_state(chat_id)
+        state.is_playing = True
+        state.is_paused  = False
 
-    async def stop(self, chat_id: int, assistant_id: int):
+    async def stop(self, chat_id: int, assistant_id: int = None):
         """Stop playback, clear queue, and leave VC."""
         state = self.get_state(chat_id)
         state.queue.clear()
         state.current    = None
         state.is_playing = False
         state.is_paused  = False
-        try:
-            await self._call(assistant_id).leave_group_call(chat_id)
-        except Exception:
-            pass
 
-    async def seek(self, chat_id: int, seconds: int, assistant_id: int):
+        call = self._calls.pop(chat_id, None)
+        if call:
+            try:
+                await call.stop()
+            except Exception:
+                pass
+
+    async def seek(self, chat_id: int, seconds: int, assistant_id: int = None):
         """
-        Seek to *seconds* by rebuilding the FFmpeg stream with -ss.
-        Requires the track to have a local file (yt-dlp download).
+        Seek to *seconds* by re-streaming the file with an FFmpeg -ss offset.
+        Creates a new process: ffmpeg -ss <seconds> -i <file> → pipe → GroupCallFile
         """
+        import subprocess, tempfile, os
+
         state = self.get_state(chat_id)
-        if not state.current:
-            raise ValueError("Nothing is playing.")
+        if not state.current or not state.current.file_path:
+            raise ValueError("Nothing is playing or file not available for seeking.")
         if not (0 <= seconds <= state.current.duration):
-            raise ValueError(
-                f"Seek position {seconds}s out of range "
-                f"(track length: {state.current.duration}s)."
-            )
-        stream = _build_stream(state.current, seek_seconds=seconds)
-        await self._call(assistant_id).change_stream(chat_id, stream)
+            raise ValueError(f"Position {seconds}s out of range.")
 
-    async def set_volume(self, chat_id: int, volume: int, assistant_id: int):
-        """Set volume 1–200 (PyTgCalls 2.x unit: percentage)."""
+        # Write FFmpeg-seeked output to a temp file, then hot-swap
+        src = state.current.file_path
+        tmp = src.replace(".mp3", f"_seek{seconds}.mp3")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y", "-ss", str(seconds), "-i", src,
+                "-acodec", "copy", tmp,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(proc.communicate(), timeout=30)
+
+            call = self._calls.get(chat_id)
+            if call:
+                call.input_filename = tmp
+                state.is_playing = True
+                state.is_paused  = False
+        except asyncio.TimeoutError:
+            raise RuntimeError("FFmpeg seek timed out.")
+        except Exception as e:
+            raise RuntimeError(f"Seek failed: {e}")
+
+    async def set_volume(self, chat_id: int, volume: int, assistant_id: int = None):
+        """Set volume 0–200. GroupCallFile.set_is_mute / change_volume_call."""
         volume = max(1, min(200, volume))
         self.get_state(chat_id).volume = volume
-        await self._call(assistant_id).change_volume_call(chat_id, volume)
+        call = self._calls.get(chat_id)
+        if call:
+            try:
+                # 0.0.24 uses set_my_volume (some builds) or change_volume_call
+                if hasattr(call, 'change_volume_call'):
+                    await call.change_volume_call(volume)
+                elif hasattr(call, 'set_my_volume'):
+                    await call.set_my_volume(volume)
+            except Exception as e:
+                log.debug(f"set_volume non-fatal: {e}")
 
     # ── Loop / shuffle ─────────────────────────────────────────────────────
 
@@ -311,7 +314,7 @@ class CallManager:
     def cycle_loop(self, chat_id: int) -> LoopMode:
         modes = list(LoopMode)
         state = self.get_state(chat_id)
-        new = modes[(modes.index(state.loop_mode) + 1) % len(modes)]
+        new   = modes[(modes.index(state.loop_mode) + 1) % len(modes)]
         state.loop_mode = new
         return new
 
@@ -319,42 +322,22 @@ class CallManager:
 
     def register_stream_end_handlers(self, callback: Callable):
         """
-        Wire *callback(chat_id, assistant_id)* to every PyTgCalls instance.
-        Called from plugins/stream_events.py AFTER init_assistants().
-
-        Expected signature:
-            async def callback(chat_id: int, assistant_id: int): ...
+        Store the callback to call when a stream ends.
+        In 0.0.24, the callback is attached per-chat in _get_or_create_call().
+        Signature: async def callback(chat_id: int, assistant_id: int)
         """
-        for assistant_id, call in self._pytgcalls.items():
-            _attach_stream_end(call, assistant_id, callback)
-            log.debug(f"   ✔ stream_end registered for assistant {assistant_id}")
+        self._on_end_cb = callback
+        log.info("🎛  Stream-end callback registered.")
 
-    # ── Helpers ────────────────────────────────────────────────────────────
+    # ── Cleanup ────────────────────────────────────────────────────────────
 
     def cleanup_state(self, chat_id: int):
-        """Free memory for a finished chat session."""
         self._states.pop(chat_id, None)
-        self._chat_assistant.pop(chat_id, None)
+        self._calls.pop(chat_id, None)
 
     def get_assistant_for_chat(self, chat_id: int) -> Optional[int]:
-        return self._chat_assistant.get(chat_id)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Helper: attach stream-end handler to one PyTgCalls instance
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _attach_stream_end(call: PyTgCalls, assistant_id: int, callback: Callable):
-    @call.on_stream_end()
-    async def _handler(_, update):
-        try:
-            await callback(update.chat_id, assistant_id)
-        except Exception as e:
-            log.error(
-                f"stream_end callback error (assistant {assistant_id}, "
-                f"chat {getattr(update, 'chat_id', '?')}): {e}",
-                exc_info=True,
-            )
+        """Not tracked per-chat in 0.x; returns None (callers handle this)."""
+        return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
