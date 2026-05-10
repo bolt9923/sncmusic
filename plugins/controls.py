@@ -377,3 +377,29 @@ async def control_callback(client: Client, callback: CallbackQuery):
 async def search_cancel_callback(client: Client, callback: CallbackQuery):
     await callback.message.delete()
     await callback.answer("❌ Search cancelled.")
+
+
+# ── play_yt_ callback — fires when user picks a search result ─────────────────
+
+@tunebot.bot.on_callback_query(filters.regex(r"^play_yt_(.+)_(\d+)$"))
+async def play_yt_callback(client: Client, callback: CallbackQuery):
+    """Handle inline search result selection from /search command."""
+    import re
+    m = re.match(r"^play_yt_(.+)_(\d+)$", callback.data)
+    if not m:
+        await callback.answer("Invalid data.", show_alert=True)
+        return
+
+    vid_id = m.group(1)
+    url = f"https://www.youtube.com/watch?v={vid_id}"
+
+    await callback.answer("🎵 Adding to queue…")
+    await callback.message.delete()
+
+    # Reuse the play pipeline via a synthetic message edit
+    from plugins.play import _queue_and_play
+    # Build a minimal fake message context using the callback's message
+    msg = callback.message
+    msg.from_user = callback.from_user
+    msg.chat = callback.message.chat
+    await _queue_and_play(client, msg, query=url)
