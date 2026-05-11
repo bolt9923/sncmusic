@@ -1,111 +1,215 @@
-import asyncio
-from dataclasses import dataclass, field
-from enum import Enum, auto
-from typing import Dict, List, Optional
-
 from pytgcalls import PyTgCalls
-from pytgcalls.types.input_stream import AudioPiped
-
-from helpers.logger import LOGGER
-
-log = LOGGER(__name__)
-
-
-# ─────────────────────────────
-# MODELS (RESTORED FOR UI)
-# ─────────────────────────────
-
-class LoopMode(Enum):
-    NONE = auto()
-    TRACK = auto()
-    QUEUE = auto()
+from pytgcalls.types.input_stream.audio import AudioPiped
+from pytgcalls.types.input_stream.audio import AudioVideoPiped
+from pytgcalls.types.input_stream import AudioParameters
+from pytgcalls.types.stream import StreamAudioEnded
 
 
-@dataclass
-class Track:
-    title: str
-    url: str
-    duration: int = 0
-    thumbnail: str = ""
-    requester_id: int = 0
-    requester_name: str = ""
-    file_path: Optional[str] = None
-
-
-@dataclass
 class GroupCallState:
-    queue: List[Track] = field(default_factory=list)
-    current: Optional[Track] = None
-    is_playing: bool = False
-    is_paused: bool = False
-    loop_mode: LoopMode = LoopMode.NONE
+    PLAYING = "playing"
+    PAUSED = "paused"
+    STOPPED = "stopped"
 
 
-# ─────────────────────────────
-# CALL MANAGER
-# ─────────────────────────────
+class LoopMode:
+    OFF = 0
+    SINGLE = 1
+    QUEUE = 2
+
+
+class Track:
+    def __init__(
+        self,
+        title: str,
+        file_path: str,
+        requested_by: str = None,
+        duration: int = 0,
+        video: bool = False,
+    ):
+        self.title = title
+        self.file_path = file_path
+        self.requested_by = requested_by
+        self.duration = duration
+        self.video = video
+
 
 class CallManager:
-    def __init__(self):
-        self.calls: Dict[int, PyTgCalls] = {}
-        self.states: Dict[int, GroupCallState] = {}
-        self.assistants = []
+    def __init__(self, app):
+        self.app = app
+        self.pytgcalls = PyTgCalls(app)
 
-    def get_state(self, chat_id: int) -> GroupCallState:
-        if chat_id not in self.states:
-            self.states[chat_id] = GroupCallState()
-        return self.states[chat_id]
+        self.queues = {}
+        self.states = {}
+        self.loop_modes = {}
 
-    async def init_assistants(self, assistants):
-        self.assistants = assistants
-        log.info("VC Manager initialized")
+        @self.pytgcalls.on_stream_end()
+        async def stream_end_handler(_, update: StreamAudioEnded):
+            chat_id = update.chat_id
+            await self.play_next(chat_id)
 
-    def get_call(self, chat_id: int):
-        if chat_id not in self.calls:
-            assistant = self.assistants[abs(chat_id) % len(self.assistants)]
-            self.calls[chat_id] = PyTgCalls(assistant)
-        return self.calls[chat_id]
+    async def start(self):
+        await self.pytgcalls.start()
 
-    async def start(self, chat_id: int):
-        call = self.get_call(chat_id)
-        await call.start()
+    async def join_and_play(
+        self,
+        chat_id: int,
+        track: Track,
+    ):
+        try:
+            if track.video:
+                stream = AudioVideoPiped(
+                    track.file_path,
+                    audio_parameters=AudioParameters(
+                        bitrate=48000,
+                        channels=2,
+                    ),
+                )
+            else:
+                stream = AudioPiped(
+                    track.file_path,
+                    audio_parameters=AudioParameters(
+                        bitrate=48000,
+                        channels=2,
+                    ),
+                )
 
-    async def play(self, chat_id: int, track: Track):
-        if not track.file_path:
-            return
+            await self.pytgcalls.join_group_call(
+                chat_id,
+                stream,
+            )
 
-        call = self.get_call(chat_id)
-        state = self.get_state(chat_id)
+            self.states[chat_id] = GroupCallState.PLAYING
 
-        if state.is_playing:
-            await call.change_stream(chat_id, AudioPiped(track.file_path))
-        else:
-            await call.join_group_call(chat_id, AudioPiped(track.file_path))
+        except Exception as e:
+            print(f"Join Error: {e}")
 
-        state.current = track
-        state.is_playing = True
-        state.is_paused = False
+    async def change_stream(
+        self,
+        chat_id: int,
+        track: Track,
+    ):
+        try:
+            if track.video:
+                stream = AudioVideoPiped(
+                    track.file_path,
+                    audio_parameters=AudioParameters(
+                        bitrate=48000,
+                        channels=2,
+                    ),
+                )
+            else:
+                stream = AudioPiped(
+                    track.file_path,
+                    audio_parameters=AudioParameters(
+                        bitrate=48000,
+                        channels=2,
+                    ),
+                )
 
-    async def pause(self, chat_id: int):
-        call = self.get_call(chat_id)
-        await call.pause_stream(chat_id)
+            await self.pytgcalls.change_stream(
+                chat_id,
+                stream,
+            )
 
-        state = self.get_state(chat_id)
-        state.is_paused = True
-        state.is_playing = False
+            self.states[chat_id] = GroupCallState.PLAYING
 
-    async def resume(self, chat_id: int):
-        call = self.get_call(chat_id)
-        await call.resume_stream(chat_id)
+        except Exception as e:
+            print(f"Change Stream Error: {e}")
 
-        state = self.get_state(chat_id)
-        state.is_paused = False
-        state.is_playing = True
+    async def add_to_queue(
+        self,
+        chat_id: int,
+        track: Track,
+    ):
+        if chat_id not in self.queues:
+            self.queues[chat_id] = []
+
+        self.queues[chat_id].append(track)
+
+    async def play_next(self, chat_id: int):
+        try:
+            if chat_id not in self.queues:
+                await self.stop(chat_id)
+                return
+
+            if len(self.queues[chat_id]) == 0:
+                await self.stop(chat_id)
+                return
+
+            next_track = self.queues[chat_id].pop(0)
+
+            await self.change_stream(
+                chat_id,
+                next_track,
+            )
+
+        except Exception as e:
+            print(f"Next Track Error: {e}")
+
+    async def skip(self, chat_id: int):
+        await self.play_next(chat_id)
 
     async def stop(self, chat_id: int):
-        call = self.calls.get(chat_id)
-        if call:
-            await call.leave_group_call(chat_id)
-            self.calls.pop(chat_id, None)
+        try:
+            await self.pytgcalls.leave_group_call(chat_id)
 
-        self.states.pop(chat_id, None)
+            self.states[chat_id] = GroupCallState.STOPPED
+
+            if chat_id in self.queues:
+                self.queues[chat_id] = []
+
+        except Exception as e:
+            print(f"Stop Error: {e}")
+
+    async def pause(self, chat_id: int):
+        try:
+            await self.pytgcalls.pause_stream(chat_id)
+            self.states[chat_id] = GroupCallState.PAUSED
+
+        except Exception as e:
+            print(f"Pause Error: {e}")
+
+    async def resume(self, chat_id: int):
+        try:
+            await self.pytgcalls.resume_stream(chat_id)
+            self.states[chat_id] = GroupCallState.PLAYING
+
+        except Exception as e:
+            print(f"Resume Error: {e}")
+
+    async def mute(self, chat_id: int):
+        try:
+            await self.pytgcalls.mute_stream(chat_id)
+
+        except Exception as e:
+            print(f"Mute Error: {e}")
+
+    async def unmute(self, chat_id: int):
+        try:
+            await self.pytgcalls.unmute_stream(chat_id)
+
+        except Exception as e:
+            print(f"Unmute Error: {e}")
+
+    async def set_volume(
+        self,
+        chat_id: int,
+        volume: int,
+    ):
+        try:
+            await self.pytgcalls.change_volume_call(
+                chat_id,
+                volume,
+            )
+
+        except Exception as e:
+            print(f"Volume Error: {e}")
+
+    def get_queue(self, chat_id: int):
+        return self.queues.get(chat_id, [])
+
+    def get_state(self, chat_id: int):
+        return self.states.get(
+            chat_id,
+            GroupCallState.STOPPED,
+        )
