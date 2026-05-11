@@ -1,7 +1,7 @@
 from pyrogram import Client
 from pytgcalls import PyTgCalls
 
-from pytgcalls.types.input_stream import AudioPiped
+from pytgcalls.types.input_stream.implementation import AudioPiped
 from pytgcalls.types.input_stream.quality import HighQualityAudio
 
 from pytgcalls.types.stream import StreamAudioEnded
