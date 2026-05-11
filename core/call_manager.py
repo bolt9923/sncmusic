@@ -1,12 +1,10 @@
 from pyrogram import Client
-from pyrocalls import PyroCalls
+from pytgcalls import PyTgCalls
 
-from pyrocalls.types.input_stream import AudioPiped
-from pyrocalls.types.input_stream.quality import (
-    HighQualityAudio,
-)
+from pytgcalls.types.input_stream.audio import AudioPiped
+from pytgcalls.types.input_stream.quality import HighQualityAudio
 
-from pyrocalls.types.stream import StreamAudioEnded
+from pytgcalls.types.stream import StreamAudioEnded
 
 
 class GroupCallState:
@@ -38,7 +36,7 @@ class Track:
 class CallManager:
     def __init__(self, app: Client):
         self.app = app
-        self.calls = PyroCalls(app)
+        self.calls = PyTgCalls(app)
 
         self.queues = {}
         self.states = {}
