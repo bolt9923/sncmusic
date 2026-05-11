@@ -11,8 +11,15 @@ from pyrogram.types import InputMediaPhoto, Message
 from pytgcalls import PyTgCalls, exceptions, types
 from pytgcalls.pytgcalls_session import PyTgCallsSession
 
-from anony import (app, config, db, lang, logger,
-                   queue, thumb, userbot, yt)
+from bot import app
+from config import config
+from helpers.logger import LOGGER as logger
+from core.database import db
+from core.queue import queue
+from helpers.thumbnail import thumb
+from core.userbot import userbot
+from core.youtube import yt
+
 from anony.helpers import Media, Track, buttons
 
 
