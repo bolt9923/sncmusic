@@ -1,5 +1,5 @@
 dlgram>=1.0.0
-py-tgcalls==2.2.8
+py-tgcalls==2.0.6
 pyrogram==2.0.106
 tgcrypto
 yt-dlp
