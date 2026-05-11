@@ -1,8 +1,12 @@
-from pytgcalls import PyTgCalls
-from pytgcalls.types.input_stream.audio import AudioPiped
-from pytgcalls.types.input_stream.audio import AudioVideoPiped
-from pytgcalls.types.input_stream import AudioParameters
-from pytgcalls.types.stream import StreamAudioEnded
+from pyrogram import Client
+from pyrocalls import PyroCalls
+
+from pyrocalls.types.input_stream import AudioPiped
+from pyrocalls.types.input_stream.quality import (
+    HighQualityAudio,
+)
+
+from pyrocalls.types.stream import StreamAudioEnded
 
 
 class GroupCallState:
@@ -24,31 +28,28 @@ class Track:
         file_path: str,
         requested_by: str = None,
         duration: int = 0,
-        video: bool = False,
     ):
         self.title = title
         self.file_path = file_path
         self.requested_by = requested_by
         self.duration = duration
-        self.video = video
 
 
 class CallManager:
-    def __init__(self, app):
+    def __init__(self, app: Client):
         self.app = app
-        self.pytgcalls = PyTgCalls(app)
+        self.calls = PyroCalls(app)
 
         self.queues = {}
         self.states = {}
-        self.loop_modes = {}
 
-        @self.pytgcalls.on_stream_end()
-        async def stream_end_handler(_, update: StreamAudioEnded):
+        @self.calls.on_stream_end()
+        async def on_stream_end(_, update: StreamAudioEnded):
             chat_id = update.chat_id
             await self.play_next(chat_id)
 
     async def start(self):
-        await self.pytgcalls.start()
+        await self.calls.start()
 
     async def join_and_play(
         self,
@@ -56,24 +57,12 @@ class CallManager:
         track: Track,
     ):
         try:
-            if track.video:
-                stream = AudioVideoPiped(
-                    track.file_path,
-                    audio_parameters=AudioParameters(
-                        bitrate=48000,
-                        channels=2,
-                    ),
-                )
-            else:
-                stream = AudioPiped(
-                    track.file_path,
-                    audio_parameters=AudioParameters(
-                        bitrate=48000,
-                        channels=2,
-                    ),
-                )
+            stream = AudioPiped(
+                track.file_path,
+                HighQualityAudio(),
+            )
 
-            await self.pytgcalls.join_group_call(
+            await self.calls.join_group_call(
                 chat_id,
                 stream,
             )
@@ -81,7 +70,7 @@ class CallManager:
             self.states[chat_id] = GroupCallState.PLAYING
 
         except Exception as e:
-            print(f"Join Error: {e}")
+            print(f"[JOIN ERROR] {e}")
 
     async def change_stream(
         self,
@@ -89,24 +78,12 @@ class CallManager:
         track: Track,
     ):
         try:
-            if track.video:
-                stream = AudioVideoPiped(
-                    track.file_path,
-                    audio_parameters=AudioParameters(
-                        bitrate=48000,
-                        channels=2,
-                    ),
-                )
-            else:
-                stream = AudioPiped(
-                    track.file_path,
-                    audio_parameters=AudioParameters(
-                        bitrate=48000,
-                        channels=2,
-                    ),
-                )
+            stream = AudioPiped(
+                track.file_path,
+                HighQualityAudio(),
+            )
 
-            await self.pytgcalls.change_stream(
+            await self.calls.change_stream(
                 chat_id,
                 stream,
             )
@@ -114,7 +91,7 @@ class CallManager:
             self.states[chat_id] = GroupCallState.PLAYING
 
         except Exception as e:
-            print(f"Change Stream Error: {e}")
+            print(f"[CHANGE STREAM ERROR] {e}")
 
     async def add_to_queue(
         self,
@@ -144,14 +121,14 @@ class CallManager:
             )
 
         except Exception as e:
-            print(f"Next Track Error: {e}")
+            print(f"[NEXT ERROR] {e}")
 
     async def skip(self, chat_id: int):
         await self.play_next(chat_id)
 
     async def stop(self, chat_id: int):
         try:
-            await self.pytgcalls.leave_group_call(chat_id)
+            await self.calls.leave_group_call(chat_id)
 
             self.states[chat_id] = GroupCallState.STOPPED
 
@@ -159,37 +136,39 @@ class CallManager:
                 self.queues[chat_id] = []
 
         except Exception as e:
-            print(f"Stop Error: {e}")
+            print(f"[STOP ERROR] {e}")
 
     async def pause(self, chat_id: int):
         try:
-            await self.pytgcalls.pause_stream(chat_id)
+            await self.calls.pause_stream(chat_id)
+
             self.states[chat_id] = GroupCallState.PAUSED
 
         except Exception as e:
-            print(f"Pause Error: {e}")
+            print(f"[PAUSE ERROR] {e}")
 
     async def resume(self, chat_id: int):
         try:
-            await self.pytgcalls.resume_stream(chat_id)
+            await self.calls.resume_stream(chat_id)
+
             self.states[chat_id] = GroupCallState.PLAYING
 
         except Exception as e:
-            print(f"Resume Error: {e}")
+            print(f"[RESUME ERROR] {e}")
 
     async def mute(self, chat_id: int):
         try:
-            await self.pytgcalls.mute_stream(chat_id)
+            await self.calls.mute_stream(chat_id)
 
         except Exception as e:
-            print(f"Mute Error: {e}")
+            print(f"[MUTE ERROR] {e}")
 
     async def unmute(self, chat_id: int):
         try:
-            await self.pytgcalls.unmute_stream(chat_id)
+            await self.calls.unmute_stream(chat_id)
 
         except Exception as e:
-            print(f"Unmute Error: {e}")
+            print(f"[UNMUTE ERROR] {e}")
 
     async def set_volume(
         self,
@@ -197,13 +176,13 @@ class CallManager:
         volume: int,
     ):
         try:
-            await self.pytgcalls.change_volume_call(
+            await self.calls.change_volume_call(
                 chat_id,
                 volume,
             )
 
         except Exception as e:
-            print(f"Volume Error: {e}")
+            print(f"[VOLUME ERROR] {e}")
 
     def get_queue(self, chat_id: int):
         return self.queues.get(chat_id, [])
